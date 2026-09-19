@@ -12,53 +12,65 @@ export async function connectToViewer(): Promise<Viewer> {
   return Workspace.connect(window.parent, () => {}, 30_000);
 }
 
-const STOREY_CLASS = "ifcbuildingstorey";
+/**
+ * The viewer matches this spelling only — "IfcBuildingStorey" returns nothing.
+ * Verified against a real model through the Diagnose probe.
+ */
+const STOREY_CLASS = "IFCBUILDINGSTOREY";
+
+/** Hierarchy types worth trying when looking for the objects inside a storey. */
+const CONTAINMENT_TYPES = [2 /* SpatialContainment */, 1 /* SpatialHierarchy */, 3 /* Containment */];
 
 /**
- * Walks every loaded model and returns its building storeys with the ids of the
- * objects they contain.
+ * Finds every building storey in the loaded models, with the objects each one contains.
  *
- * One pass per model: list the objects to find the storeys, read the storeys'
- * properties for name and elevation, then ask the spatial hierarchy which objects
- * sit under each storey.
+ * Note that `getObjects` is a lookup, not a listing: called with a model id and no object
+ * ids it returns nothing at all. The class filter is what actually searches, and it
+ * searches every loaded model at once, returning results already grouped by model.
  */
 export async function scanStoreys(viewer: Viewer): Promise<Storey[]> {
   const models = await viewer.viewer.getModels("loaded");
+  const modelsById = new Map(models.map((model) => [model.id, model]));
+
+  const found = await viewer.viewer.getObjects({ parameter: { class: STOREY_CLASS } });
   const storeys: Storey[] = [];
 
-  for (const model of models) {
-    const [modelObjects] = await viewer.viewer.getObjects({
-      modelObjectIds: [{ modelId: model.id }],
-    });
-    const storeyIds = (modelObjects?.objects ?? [])
-      .filter((object) => object.class?.toLowerCase() === STOREY_CLASS)
-      .map((object) => object.id);
+  for (const entry of found) {
+    const model = modelsById.get(entry.modelId);
+    if (!model) continue; // a model that is in the project but not in the viewer
 
+    const storeyIds = (entry.objects ?? []).map((object) => object.id);
     if (storeyIds.length === 0) continue;
 
     const storeyProperties = await viewer.viewer.getObjectProperties(model.id, storeyIds);
 
     for (const storey of storeyProperties) {
-      // getHierarchyChildren flattens results, so ask one storey at a time to keep
-      // the mapping from storey to objects unambiguous. Models have few storeys.
-      const children = await viewer.viewer.getHierarchyChildren(
-        model.id,
-        [storey.id],
-        2 /* HierarchyType.SpatialContainment */,
-        true /* recursive */,
-      );
-
       storeys.push({
         modelId: model.id,
         modelName: model.name,
         name: storey.product?.name ?? `Storey ${storey.id}`,
         elevation: readElevation(storey),
-        objectRuntimeIds: children.map((child) => child.id),
+        objectRuntimeIds: await childrenOf(viewer, model.id, storey.id),
       });
     }
   }
 
   return storeys;
+}
+
+/**
+ * Returns the objects sitting under a storey.
+ *
+ * Which hierarchy type holds that relationship varies between exports, so try the
+ * likely ones in turn and take the first that yields anything. Asking one storey at a
+ * time keeps the mapping unambiguous, since the API flattens its results.
+ */
+async function childrenOf(viewer: Viewer, modelId: string, storeyId: number): Promise<number[]> {
+  for (const hierarchyType of CONTAINMENT_TYPES) {
+    const children = await viewer.viewer.getHierarchyChildren(modelId, [storeyId], hierarchyType, true);
+    if (children.length > 0) return children.map((child) => child.id);
+  }
+  return [];
 }
 
 /**

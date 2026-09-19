@@ -64,3 +64,16 @@ Notes:
 - `getHierarchyChildren` returns a flat list, so call it one storey at a time if you need to
   know which storey each object belongs to.
 - `getObjects` with `modelObjectIds: [{ modelId }]` and no runtime ids returns all objects of that model.
+
+## Viewer API behaviour verified against a real model (ARK_Modell.ifc, 2026-09-20)
+- `getModels()` returns **every file in the project** (68 in the test project), not just what is in
+  the viewer. Filter with `getModels("loaded")`. Other states seen: `notAssimilated`, `assimilated`.
+- `ModelSpec.versionId` is `undefined` for most files. Use `ModelSpec.id`.
+- `getObjects({ modelObjectIds: [{ modelId }] })` with no `objectRuntimeIds` returns **0 objects**.
+  It is a lookup by id, not a way to list a model's contents.
+- `getObjects({ modelObjectIds: [{ modelId, recursive: true }] })` with no ids **throws**
+  (`can't access property "push", S.objectRuntimeIds is undefined`).
+- `getObjects({ parameter: { class: "IFCBUILDINGSTOREY" } })` is the way to find storeys. It searches
+  all loaded models at once and returns `ModelObjects[]` already grouped by `modelId`.
+- The class string is **case sensitive and all caps**. `"IfcBuildingStorey"`, `"BuildingStorey"` and
+  `"IfcBuildingStorey.1"` all return 0 results.

@@ -1,13 +1,18 @@
 /**
- * A one-off probe that reports what the viewer API actually returns for the loaded
- * models, so we can see why a scan found nothing instead of guessing.
+ * A probe that reports what the viewer API actually returns, so a scan that finds
+ * nothing can be explained rather than guessed at.
  *
- * Every step is wrapped so that one failing call still leaves the rest of the report
+ * Every step is wrapped so one failing call still leaves the rest of the report
  * readable. The output is plain text, meant to be copied out of the panel.
+ *
+ * Already established by earlier runs, and worth not re-testing:
+ * - getObjects with a model id but no object ids returns nothing; it is a lookup, not a listing.
+ * - getObjects with `recursive: true` and no object ids throws.
+ * - The class filter is the way to search, and wants "IFCBUILDINGSTOREY" in capitals.
  */
 import type { Viewer } from "./workspace.ts";
 
-const CLASS_SPELLINGS = ["IFCBUILDINGSTOREY", "IfcBuildingStorey", "IfcBuildingStorey.1", "BuildingStorey"];
+const STOREY_CLASS = "IFCBUILDINGSTOREY";
 
 export async function diagnose(viewer: Viewer): Promise<string> {
   const out: string[] = [];
@@ -21,70 +26,62 @@ export async function diagnose(viewer: Viewer): Promise<string> {
   };
 
   const api = viewer.viewer;
-
   let loaded: Awaited<ReturnType<typeof api.getModels>> = [];
+
   await attempt("getModels", async () => {
     const all = await api.getModels();
     loaded = await api.getModels("loaded");
-    say(`getModels() -> ${all.length} models, getModels("loaded") -> ${loaded.length}`);
-    for (const model of all) {
-      say(`  name=${model.name} state=${model.state} type=${model.type}`);
-      say(`    id=${model.id}`);
-      say(`    versionId=${model.versionId}`);
+    say(`${all.length} models in project, ${loaded.length} loaded in the viewer:`);
+    for (const model of loaded) {
+      say(`  ${model.name}  id=${model.id} versionId=${model.versionId} state=${model.state}`);
     }
   });
 
-  const model = loaded[0] ?? undefined;
-  if (!model) {
-    say("No loaded models — stopping here.");
+  const storeysByModel = new Map<string, number[]>();
+  await attempt("class filter", async () => {
+    const found = await api.getObjects({ parameter: { class: STOREY_CLASS } });
+    say(`\nclass filter "${STOREY_CLASS}" -> ${found.length} model(s) with matches`);
+    for (const entry of found) {
+      const ids = (entry.objects ?? []).map((object) => object.id);
+      storeysByModel.set(entry.modelId, ids);
+      const known = loaded.find((model) => model.id === entry.modelId);
+      say(`  modelId=${entry.modelId} (${known ? known.name : "NOT IN LOADED LIST"}) -> ${ids.length} storeys`);
+    }
+  });
+
+  const [modelId, storeyIds] = [...storeysByModel.entries()][0] ?? [];
+  if (!modelId || !storeyIds || storeyIds.length === 0) {
+    say("\nNo storeys to probe further.");
     return out.join("\n");
   }
-  say(`\n--- probing model: ${model.name} ---`);
 
-  // Does a plain object listing carry the class field at all?
-  let firstObjectId: number | undefined;
-  const listings: [string, Parameters<typeof api.getObjects>[0]][] = [
-    ["flat", { modelObjectIds: [{ modelId: model.id }] }],
-    ["recursive", { modelObjectIds: [{ modelId: model.id, recursive: true }] }],
-    ["by versionId", { modelObjectIds: [{ modelId: model.versionId }] }],
-  ];
-  for (const [label, selector] of listings) {
-    await attempt(`getObjects ${label}`, async () => {
-      const result = await api.getObjects(selector);
-      const objects = result.flatMap((entry) => entry.objects ?? []);
-      const withClass = objects.filter((object) => object.class !== undefined).length;
-      say(`getObjects ${label} -> ${objects.length} objects, ${withClass} of them have a class`);
-      say(`  first three raw: ${JSON.stringify(objects.slice(0, 3))}`);
-      const classes = [...new Set(objects.map((object) => object.class))].slice(0, 25);
-      say(`  distinct class values (max 25): ${JSON.stringify(classes)}`);
-      firstObjectId ??= objects[0]?.id;
-    });
-  }
-
-  // Can the viewer filter by class server-side instead?
-  for (const spelling of CLASS_SPELLINGS) {
-    await attempt(`class filter ${spelling}`, async () => {
-      const result = await api.getObjects({ parameter: { class: spelling } });
-      const objects = result.flatMap((entry) => entry.objects ?? []);
-      say(`getObjects parameter.class="${spelling}" -> ${objects.length} objects`);
-      if (objects.length > 0) say(`  ids: ${JSON.stringify(objects.slice(0, 8).map((o) => o.id))}`);
-    });
-  }
-
-  // What does the spatial tree above a normal object look like?
-  if (firstObjectId !== undefined) {
-    say(`\n--- hierarchy above object ${firstObjectId} ---`);
-    for (const [name, type] of [["SpatialHierarchy", 1], ["SpatialContainment", 2], ["Containment", 3]] as const) {
-      await attempt(`parents ${name}`, async () => {
-        const parents = await api.getHierarchyParents(model.id, [firstObjectId!], type, true);
-        say(`getHierarchyParents ${name} -> ${JSON.stringify(parents)}`);
-      });
+  // Do the storeys carry a usable name and height?
+  await attempt("getObjectProperties", async () => {
+    const properties = await api.getObjectProperties(modelId, storeyIds);
+    say(`\ngetObjectProperties -> ${properties.length} results`);
+    for (const storey of properties.slice(0, 3)) {
+      say(`  id=${storey.id} class=${storey.class}`);
+      say(`    product=${JSON.stringify(storey.product)}`);
+      say(`    position=${JSON.stringify(storey.position)}`);
+      say(`    property sets=${JSON.stringify((storey.properties ?? []).map((set) => set.name))}`);
+      for (const set of storey.properties ?? []) {
+        for (const property of set.properties ?? []) {
+          if (/elev|height|niv|hoyd|høyd/i.test(property.name)) {
+            say(`    height-ish property: ${set.name}.${property.name} = ${JSON.stringify(property.value)}`);
+          }
+        }
+      }
     }
-    await attempt("getObjectProperties", async () => {
-      const [properties] = await api.getObjectProperties(model.id, [firstObjectId!]);
-      say(`getObjectProperties -> class=${properties?.class} product=${JSON.stringify(properties?.product)}`);
-      say(`  position=${JSON.stringify(properties?.position)}`);
-      say(`  property sets: ${JSON.stringify((properties?.properties ?? []).map((set) => set.name))}`);
+  });
+
+  // Which hierarchy type actually holds the storey's contents?
+  const storeyId = storeyIds[0]!;
+  say(`\nhierarchy children of storey ${storeyId}:`);
+  for (const [name, type] of [["SpatialContainment", 2], ["SpatialHierarchy", 1], ["Containment", 3]] as const) {
+    await attempt(`  ${name}`, async () => {
+      const children = await api.getHierarchyChildren(modelId, [storeyId], type, true);
+      say(`  ${name} (type ${type}) -> ${children.length} children`);
+      if (children.length > 0) say(`    first three: ${JSON.stringify(children.slice(0, 3))}`);
     });
   }
 
