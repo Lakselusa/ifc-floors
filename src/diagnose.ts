@@ -74,8 +74,17 @@ export async function diagnose(viewer: Viewer): Promise<string> {
     }
   });
 
-  // Which hierarchy type actually holds the storey's contents?
+  // How do we get at what is inside a storey?
   const storeyId = storeyIds[0]!;
+  await attempt("getObjects recursive from storey", async () => {
+    const nested = await api.getObjects({
+      modelObjectIds: [{ modelId, objectRuntimeIds: [storeyId], recursive: true }],
+    });
+    const objects = nested.flatMap((entry) => entry.objects ?? []);
+    say(`
+getObjects recursive from storey ${storeyId} -> ${objects.length} objects`);
+    say(`  first three: ${JSON.stringify(objects.slice(0, 3))}`);
+  });
   say(`\nhierarchy children of storey ${storeyId}:`);
   for (const [name, type] of [["SpatialContainment", 2], ["SpatialHierarchy", 1], ["Containment", 3]] as const) {
     await attempt(`  ${name}`, async () => {

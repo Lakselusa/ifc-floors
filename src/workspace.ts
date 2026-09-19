@@ -50,7 +50,7 @@ export async function scanStoreys(viewer: Viewer): Promise<Storey[]> {
         modelName: model.name,
         name: storey.product?.name ?? `Storey ${storey.id}`,
         elevation: readElevation(storey),
-        objectRuntimeIds: await childrenOf(viewer, model.id, storey.id),
+        objectRuntimeIds: await objectsInStorey(viewer, model.id, storey.id),
       });
     }
   }
@@ -61,11 +61,22 @@ export async function scanStoreys(viewer: Viewer): Promise<Storey[]> {
 /**
  * Returns the objects sitting under a storey.
  *
- * Which hierarchy type holds that relationship varies between exports, so try the
- * likely ones in turn and take the first that yields anything. Asking one storey at a
- * time keeps the mapping unambiguous, since the API flattens its results.
+ * The first attempt is `getObjects` with `recursive`, which is what that flag is for:
+ * start at the storey and walk down. It needs a starting object — passing `recursive`
+ * without one throws inside the viewer. If it comes back empty, fall back to the
+ * hierarchy API, trying each relationship type in turn, since which one an export uses
+ * varies. One storey at a time either way, because the hierarchy call flattens results.
  */
-async function childrenOf(viewer: Viewer, modelId: string, storeyId: number): Promise<number[]> {
+async function objectsInStorey(viewer: Viewer, modelId: string, storeyId: number): Promise<number[]> {
+  const nested = await viewer.viewer.getObjects({
+    modelObjectIds: [{ modelId, objectRuntimeIds: [storeyId], recursive: true }],
+  });
+  const ids = nested
+    .flatMap((entry) => entry.objects ?? [])
+    .map((object) => object.id)
+    .filter((id) => id !== storeyId); // the storey container itself is not geometry
+  if (ids.length > 0) return ids;
+
   for (const hierarchyType of CONTAINMENT_TYPES) {
     const children = await viewer.viewer.getHierarchyChildren(modelId, [storeyId], hierarchyType, true);
     if (children.length > 0) return children.map((child) => child.id);
@@ -99,16 +110,24 @@ function readElevation(storey: { position?: { z?: number }; properties?: unknown
   return null;
 }
 
+/** The per-model object lists the viewer API takes, built from our own grouping. */
+function toModelObjectIds(byModel: Map<string, number[]>) {
+  return [...byModel.entries()].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds }));
+}
+
 /** Hides everything, then shows only the given objects. */
 export async function isolate(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
+  const modelObjectIds = toModelObjectIds(byModel);
+  if (modelObjectIds.length === 0) return;
   await viewer.viewer.setObjectState(undefined, { visible: false });
-  const modelObjectIds = [...byModel.entries()].map(([modelId, objectRuntimeIds]) => ({
-    modelId,
-    objectRuntimeIds,
-  }));
-  if (modelObjectIds.length > 0) {
-    await viewer.viewer.setObjectState({ modelObjectIds }, { visible: true });
-  }
+  await viewer.viewer.setObjectState({ modelObjectIds }, { visible: true });
+}
+
+/** Selects the given objects, replacing any existing selection. */
+export async function select(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
+  const modelObjectIds = toModelObjectIds(byModel);
+  if (modelObjectIds.length === 0) return;
+  await viewer.viewer.setSelection({ modelObjectIds }, "set");
 }
 
 /** Restores the viewer's default visibility for every object. */

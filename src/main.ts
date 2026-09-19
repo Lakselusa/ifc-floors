@@ -1,5 +1,5 @@
 import { groupStoreysIntoLevels, objectIdsByModel, type Level, type Storey } from "./floors.ts";
-import { connectToViewer, scanStoreys, isolate, showAll, type Viewer } from "./workspace.ts";
+import { connectToViewer, scanStoreys, isolate, select, showAll, type Viewer } from "./workspace.ts";
 import { mockStoreys } from "./mock.ts";
 import { diagnose } from "./diagnose.ts";
 
@@ -10,6 +10,7 @@ const isolateBtn = document.querySelector<HTMLButtonElement>("#isolate")!;
 const showAllBtn = document.querySelector<HTMLButtonElement>("#show-all")!;
 const diagnoseBtn = document.querySelector<HTMLButtonElement>("#diagnose")!;
 const reportEl = document.querySelector<HTMLTextAreaElement>("#report")!;
+const selectBtn = document.querySelector<HTMLButtonElement>("#select")!;
 
 /** Null when running standalone in a browser tab rather than inside Trimble Connect. */
 let viewer: Viewer | null = null;
@@ -84,19 +85,40 @@ diagnoseBtn.addEventListener("click", async () => {
   setStatus("Report below is selected — press Ctrl+C to copy it.");
 });
 
-isolateBtn.addEventListener("click", () => {
+/**
+ * The objects on the ticked floors, or null with an explanation on screen.
+ *
+ * Refusing to act on an empty set matters: an isolate that hides everything and then
+ * shows nothing leaves a blank viewer, which looks like the app broke rather than like
+ * the floors being empty.
+ */
+function chosenObjects(action: string): Map<string, number[]> | null {
   const chosen = levels.filter((level) => selected.has(level.id));
   if (chosen.length === 0) {
     setStatus("Tick at least one floor first.");
-    return;
+    return null;
   }
   const byModel = objectIdsByModel(chosen);
-  if (!viewer) {
-    setStatus(`Standalone mode: would isolate ${[...byModel.values()].flat().length} objects.`);
-    return;
+  const total = [...byModel.values()].reduce((sum, ids) => sum + ids.length, 0);
+  if (total === 0) {
+    setStatus(`Those floors contain no objects, so there is nothing to ${action}. Press Diagnose.`);
+    return null;
   }
-  setStatus("");
-  void isolate(viewer, byModel);
+  const models = byModel.size;
+  setStatus(`${total} objects across ${models} model${models === 1 ? "" : "s"}.`);
+  return byModel;
+}
+
+isolateBtn.addEventListener("click", () => {
+  const byModel = chosenObjects("isolate");
+  if (!byModel) return;
+  if (viewer) void isolate(viewer, byModel);
+});
+
+selectBtn.addEventListener("click", () => {
+  const byModel = chosenObjects("select");
+  if (!byModel) return;
+  if (viewer) void select(viewer, byModel);
 });
 
 showAllBtn.addEventListener("click", () => {
