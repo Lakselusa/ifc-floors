@@ -14,6 +14,18 @@ import type { Viewer } from "./workspace.ts";
 
 const STOREY_CLASS = "IFCBUILDINGSTOREY";
 
+/**
+ * JSON.stringify refuses to serialise BigInt, and some IFC property values arrive as
+ * one, which aborted the whole probe partway through. Render those as text instead.
+ */
+function json(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? `${item}` : item)) ?? "undefined";
+  } catch (error) {
+    return `<could not serialise: ${error instanceof Error ? error.message : String(error)}>`;
+  }
+}
+
 export async function diagnose(viewer: Viewer): Promise<string> {
   const out: string[] = [];
   const say = (line: string) => out.push(line);
@@ -50,12 +62,12 @@ export async function diagnose(viewer: Viewer): Promise<string> {
     }
     say(`\n--- selected object ${objectId} in model ${first.modelId} ---`);
     const [properties] = await api.getObjectProperties(first.modelId, [objectId]);
-    say(`  class=${properties?.class} product=${JSON.stringify(properties?.product)}`);
-    say(`  position=${JSON.stringify(properties?.position)}`);
-    say(`  property sets=${JSON.stringify((properties?.properties ?? []).map((set) => set.name))}`);
+    say(`  class=${properties?.class} product=${json(properties?.product)}`);
+    say(`  position=${json(properties?.position)}`);
+    say(`  property sets=${json((properties?.properties ?? []).map((set) => set.name))}`);
     for (const [label, type] of [["SpatialContainment", 2], ["SpatialHierarchy", 1], ["Containment", 3]] as const) {
       const parents = await api.getHierarchyParents(first.modelId, [objectId], type, true);
-      say(`  parents via ${label}: ${JSON.stringify(parents)}`);
+      say(`  parents via ${label}: ${json(parents)}`);
     }
   });
 
@@ -83,13 +95,13 @@ export async function diagnose(viewer: Viewer): Promise<string> {
     say(`\ngetObjectProperties -> ${properties.length} results`);
     for (const storey of properties.slice(0, 3)) {
       say(`  id=${storey.id} class=${storey.class}`);
-      say(`    product=${JSON.stringify(storey.product)}`);
-      say(`    position=${JSON.stringify(storey.position)}`);
-      say(`    property sets=${JSON.stringify((storey.properties ?? []).map((set) => set.name))}`);
+      say(`    product=${json(storey.product)}`);
+      say(`    position=${json(storey.position)}`);
+      say(`    property sets=${json((storey.properties ?? []).map((set) => set.name))}`);
       for (const set of storey.properties ?? []) {
         for (const property of set.properties ?? []) {
           if (/elev|height|niv|hoyd|høyd/i.test(property.name)) {
-            say(`    height-ish property: ${set.name}.${property.name} = ${JSON.stringify(property.value)}`);
+            say(`    height-ish property: ${set.name}.${property.name} = ${json(property.value)}`);
           }
         }
       }
@@ -105,14 +117,14 @@ export async function diagnose(viewer: Viewer): Promise<string> {
     const objects = nested.flatMap((entry) => entry.objects ?? []);
     say(`
 getObjects recursive from storey ${storeyId} -> ${objects.length} objects`);
-    say(`  first three: ${JSON.stringify(objects.slice(0, 3))}`);
+    say(`  first three: ${json(objects.slice(0, 3))}`);
   });
   say(`\nhierarchy children of storey ${storeyId}:`);
   for (const [name, type] of [["SpatialContainment", 2], ["SpatialHierarchy", 1], ["Containment", 3]] as const) {
     await attempt(`  ${name}`, async () => {
       const children = await api.getHierarchyChildren(modelId, [storeyId], type, true);
       say(`  ${name} (type ${type}) -> ${children.length} children`);
-      if (children.length > 0) say(`    first three: ${JSON.stringify(children.slice(0, 3))}`);
+      if (children.length > 0) say(`    first three: ${json(children.slice(0, 3))}`);
     });
   }
 

@@ -95,7 +95,37 @@ export function groupStoreysIntoLevels(storeys: Storey[], options: GroupOptions 
     });
   }
 
-  return levels;
+  return dedupeAcrossLevels(levels);
+}
+
+/**
+ * Makes sure no object is counted on two floors.
+ *
+ * IFC lets an element be referenced by several storeys — a wall running through two
+ * floors is the usual case — and the viewer reports it under each. Left alone, selecting
+ * one floor marks its neighbours as partly selected too, which is baffling to look at.
+ * Each object is therefore kept on the lowest floor that claims it and dropped from the
+ * rest, so the floors partition the model rather than overlapping it.
+ */
+function dedupeAcrossLevels(levels: Level[]): Level[] {
+  const seen = new Map<string, Set<number>>();
+  return levels.map((level) => {
+    const storeys = level.storeys.map((storey) => {
+      let seenForModel = seen.get(storey.modelId);
+      if (!seenForModel) {
+        seenForModel = new Set<number>();
+        seen.set(storey.modelId, seenForModel);
+      }
+      const objectRuntimeIds: number[] = [];
+      for (const id of storey.objectRuntimeIds) {
+        if (seenForModel.has(id)) continue;
+        seenForModel.add(id);
+        objectRuntimeIds.push(id);
+      }
+      return { ...storey, objectRuntimeIds };
+    });
+    return { ...level, storeys, objectCount: countObjects(storeys) };
+  });
 }
 
 /**

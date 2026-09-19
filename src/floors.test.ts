@@ -59,6 +59,30 @@ test("buckets storeys with no elevation by name instead of dropping them", () =>
   assert.equal(levels[1]!.objectCount, 2);
 });
 
+test("keeps an object on the lowest floor that claims it, not on both", () => {
+  // A wall running through two storeys is referenced by each of them.
+  const levels = groupStoreysIntoLevels([
+    storey("concrete", "L1", 0, [1, 2, 99]),
+    storey("concrete", "L2", 4000, [3, 99]),
+  ]);
+
+  assert.deepEqual(levels[0]!.storeys[0]!.objectRuntimeIds, [1, 2, 99]);
+  assert.deepEqual(levels[1]!.storeys[0]!.objectRuntimeIds, [3], "99 already belongs to L1");
+  assert.equal(levels[0]!.objectCount, 3);
+  assert.equal(levels[1]!.objectCount, 1);
+});
+
+test("does not deduplicate across different models", () => {
+  // Runtime ids are only unique within a model, so the same number in two models is
+  // two different objects.
+  const levels = groupStoreysIntoLevels([
+    storey("concrete", "L1", 0, [5]),
+    storey("pipes", "L2", 4000, [5]),
+  ]);
+  assert.equal(levels[0]!.objectCount, 1);
+  assert.equal(levels[1]!.objectCount, 1);
+});
+
 test("flattens selected levels into per-model id lists", () => {
   const levels = groupStoreysIntoLevels([
     storey("concrete", "L4", 12000, [1, 2]),
