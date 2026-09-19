@@ -1,0 +1,7 @@
+{
+  "url": "https://REPLACE-WITH-YOUR-HOST/index.html",
+  "title": "IFC Floors",
+  "description": "Filter one or more IFC models down to a single building storey.",
+  "icon": "https://REPLACE-WITH-YOUR-HOST/icon.png",
+  "extensionType": ["3dviewer"]
+}
