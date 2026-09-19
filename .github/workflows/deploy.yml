@@ -1,8 +1,12 @@
 name: Deploy to GitHub Pages
 
+# GitHub Pages serves one site per repository, so the two environments share it:
+# production at the root, dev in a /dev/ subfolder. Both branches are therefore built
+# on every run, whichever one was pushed, because publishing replaces the whole site
+# and building only the pushed branch would delete the other one.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
@@ -19,26 +23,63 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out production
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+
+      - name: Check out dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          path: dev
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-
-      - run: npm ci
-      - run: npm test
-      - run: npm run build
+          cache-dependency-path: main/package-lock.json
 
       - id: pages
         uses: actions/configure-pages@v5
 
-      - name: Point the manifest at the Pages URL
-        run: node scripts/write-manifest.mjs "${{ steps.pages.outputs.base_url }}"
+      - name: Build production
+        working-directory: main
+        run: |
+          npm ci
+          npm test
+          npm run build
+          node scripts/write-manifest.mjs "${{ steps.pages.outputs.base_url }}"
+
+      # A broken dev branch must never block a production deploy, so this step is
+      # allowed to fail and the site is assembled without it.
+      - name: Build dev
+        id: dev
+        continue-on-error: true
+        working-directory: dev
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          npm ci
+          npm run build
+          node scripts/write-manifest.mjs "${BASE_URL%/}/dev/" " (dev)"
+
+      - name: Assemble the site
+        run: |
+          mkdir -p site
+          cp -r main/dist/. site/
+          if [ "${{ steps.dev.outcome }}" = "success" ]; then
+            mkdir -p site/dev
+            cp -r dev/dist/. site/dev/
+            echo "Published production and dev."
+          else
+            echo "::warning::The dev branch failed to build; publishing production only."
+          fi
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: site
 
   deploy:
     needs: build

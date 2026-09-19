@@ -34,43 +34,21 @@ Opened directly in a browser tab, the app detects it is not in an iframe and ren
 [mock storeys](src/mock.ts) so you can work on the UI without a project. Inside Trimble
 Connect it connects to the real viewer.
 
-## Hosting it on GitHub Pages
+## Where it runs
 
-GitHub Pages works for this: it serves over HTTPS, it sends `Access-Control-Allow-Origin: *`
-so Trimble Connect can fetch the manifest, and it sets no framing headers, so the page can be
-loaded in Trimble's iframe.
+GitHub Pages serves both environments from one site: `main` at the root, `dev` in a
+`/dev/` subfolder, each with its own manifest to register in Trimble Connect. The site is
+built with relative asset paths so it works at any sub-path, and
+[scripts/write-manifest.mjs](scripts/write-manifest.mjs) fills the real deployment URL
+into the manifest during the build, so nothing hard-codes an address.
 
-[The workflow](.github/workflows/deploy.yml) builds on every push to `main`, runs the tests,
-and publishes `dist/`. The site is built with relative asset paths (`base: "./"` in
-[vite.config.ts](vite.config.ts)) so it works at any repo sub-path, and
-[scripts/write-manifest.mjs](scripts/write-manifest.mjs) fills the real deployment URL into
-the manifest during the build. Nothing needs the repo name hard-coded anywhere.
+Install it in Trimble Connect under **Project Settings -> Apps & Capabilities -> Add
+Custom**, pasting the manifest URL. Then open the 3D viewer with models loaded and the
+extension appears in the side panel.
 
-One-time setup:
-
-1. Create a **public** repo on GitHub (Pages on private repos needs a paid plan).
-2. `git remote add origin https://github.com/<user>/<repo>.git` then `git push -u origin main`.
-3. On GitHub: **Settings -> Pages -> Build and deployment -> Source: GitHub Actions**.
-4. Push, or run the workflow by hand from the Actions tab. When it finishes, the Actions
-   summary shows the published URL.
-
-Your manifest then lives at `https://<user>.github.io/<repo>/manifest.json`.
-
-## Installing it in Trimble Connect
-
-In Trimble Connect: **Project Settings -> Apps & Capabilities -> Add Custom**, and paste the
-manifest URL above. Open the 3D viewer, load your models, and the extension appears in the
-side panel.
-
-The icon is an SVG. If Trimble Connect refuses to display it, drop a PNG into `public/` and
-point the manifest's `icon` field at that instead.
-
-## Developing against a live project
-
-`npm run dev` only serves on localhost, which Trimble Connect cannot reach. For live testing
-either tunnel the dev server (`ngrok http https://localhost:5173`) and register a second
-manifest pointing at the tunnel, or just push and let Pages redeploy - the build takes about a
-minute.
+Setup, the branch workflow and how to investigate the viewer API are in
+[CONTRIBUTING.md](CONTRIBUTING.md). AI coding agents should start at
+[AGENTS.md](AGENTS.md).
 
 ## How the scan works
 
