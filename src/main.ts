@@ -2,10 +2,13 @@ import { groupStoreysIntoLevels, objectIdsByModel, formatElevation, type Level, 
 import {
   connectToViewer,
   scanStoreys,
-  showOnly,
-  select,
+  readSelection,
+  addToSelection,
+  removeFromSelection,
   clearSelection,
+  showOnly,
   showAll,
+  type Selection,
   type Viewer,
 } from "./workspace.ts";
 import { mockStoreys } from "./mock.ts";
@@ -16,7 +19,7 @@ const levelsEl = document.querySelector<HTMLUListElement>("#levels")!;
 const reportEl = document.querySelector<HTMLTextAreaElement>("#report")!;
 const refreshBtn = document.querySelector<HTMLButtonElement>("#refresh")!;
 const isolateBtn = document.querySelector<HTMLButtonElement>("#isolate")!;
-const showAllBtn = document.querySelector<HTMLButtonElement>("#show-all")!;
+const resetBtn = document.querySelector<HTMLButtonElement>("#reset")!;
 const diagnoseBtn = document.querySelector<HTMLButtonElement>("#diagnose")!;
 const heightsBtn = document.querySelector<HTMLButtonElement>("#heights")!;
 
@@ -27,7 +30,15 @@ let viewer: Viewer | null = null;
 let levels: Level[] = [];
 /** The levels in the order they appear on screen: top floor first, as on a section. */
 let displayed: Level[] = [];
-const ticked = new Set<string>();
+/**
+ * Which level each object belongs to, per model. Built once per scan so that working out
+ * how much of a floor is selected stays cheap on models with tens of thousands of objects.
+ */
+let owners = new Map<string, Map<number, string>>();
+/** What the viewer currently has selected. The panel reflects this; it does not own it. */
+let selection: Selection = new Map();
+/** How many of each level's objects are in that selection. */
+let selectedPerLevel = new Map<string, number>();
 /** Anchor for shift-clicking a range, in display order. */
 let anchor: number | null = null;
 let showHeights = readStoredHeights();
@@ -45,6 +56,20 @@ function setStatus(message: string): void {
   statusEl.hidden = message === "";
 }
 
+type Fill = "none" | "some" | "all";
+
+function fillOf(level: Level): Fill {
+  const selected = selectedPerLevel.get(level.id) ?? 0;
+  if (selected === 0) return "none";
+  return selected >= level.objectCount ? "all" : "some";
+}
+
+function totalSelected(): number {
+  let total = 0;
+  for (const ids of selection.values()) total += ids.size;
+  return total;
+}
+
 function render(): void {
   displayed = [...levels].reverse();
   levelsEl.replaceChildren(...displayed.map(buildRow));
@@ -52,9 +77,12 @@ function render(): void {
 }
 
 function buildRow(level: Level, index: number): HTMLLIElement {
+  const fill = fillOf(level);
+
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
-  checkbox.checked = ticked.has(level.id);
+  checkbox.checked = fill === "all";
+  checkbox.indeterminate = fill === "some";
   checkbox.tabIndex = -1;
 
   const name = document.createElement("span");
@@ -64,7 +92,10 @@ function buildRow(level: Level, index: number): HTMLLIElement {
   const meta = document.createElement("span");
   meta.className = "level-meta";
   const models = new Set(level.storeys.map((storey) => storey.modelName));
-  meta.textContent = `${models.size} model${models.size === 1 ? "" : "s"} · ${level.objectCount} objects`;
+  meta.textContent =
+    fill === "some"
+      ? `${selectedPerLevel.get(level.id)} of ${level.objectCount} selected`
+      : `${models.size} model${models.size === 1 ? "" : "s"} · ${level.objectCount} objects`;
 
   const label = document.createElement("label");
   label.append(checkbox, name);
@@ -78,66 +109,95 @@ function buildRow(level: Level, index: number): HTMLLIElement {
 
   const row = document.createElement("li");
   row.append(label);
-  // The checkbox is drawn from our state rather than toggling itself, so that a
-  // shift-click can set a whole range in one go without fighting the browser.
+  // The checkbox is drawn from the viewer's selection rather than toggling itself, so a
+  // shift-click can set a whole range without fighting the browser.
   row.addEventListener("click", (event) => {
     event.preventDefault();
-    toggle(index, event.shiftKey);
+    void onRowClick(index, event.shiftKey);
   });
   return row;
 }
 
-function toggle(index: number, extend: boolean): void {
+/**
+ * Clicking a floor selects all of it, unless it is already fully selected, in which case
+ * it deselects it. A partly selected floor — which is what you get after clicking a single
+ * object in the viewer — fills up rather than emptying, so a second click completes it.
+ */
+async function onRowClick(index: number, extend: boolean): Promise<void> {
+  const level = displayed[index];
+  if (!level || !viewer) return;
+
+  let chosen: Level[];
+  let add: boolean;
   if (extend && anchor !== null) {
     const from = Math.min(anchor, index);
     const to = Math.max(anchor, index);
-    for (let i = from; i <= to; i++) ticked.add(displayed[i]!.id);
+    chosen = displayed.slice(from, to + 1);
+    add = true;
   } else {
-    const id = displayed[index]!.id;
-    if (ticked.has(id)) ticked.delete(id);
-    else ticked.add(id);
+    chosen = [level];
+    add = fillOf(level) !== "all";
     anchor = index;
   }
-  render();
-  void syncSelection();
-}
 
-/** The objects on the ticked floors, grouped per model. */
-function tickedObjects(): { byModel: Map<string, number[]>; total: number } {
-  const chosen = levels.filter((level) => ticked.has(level.id));
   const byModel = objectIdsByModel(chosen);
-  const total = [...byModel.values()].reduce((sum, ids) => sum + ids.length, 0);
-  return { byModel, total };
+  if (add) await addToSelection(viewer, byModel);
+  else await removeFromSelection(viewer, byModel);
+  await refreshSelection();
 }
 
-/** Ticking a floor selects its objects in the viewer — no separate button needed. */
-async function syncSelection(): Promise<void> {
-  const { byModel, total } = tickedObjects();
-  const models = byModel.size;
-  setStatus(
-    total === 0
-      ? ticked.size === 0
-        ? ""
-        : "Those floors contain no objects. Press Diagnose."
-      : `${total} objects selected across ${models} model${models === 1 ? "" : "s"}.`,
-  );
+/** Re-reads the viewer's selection and redraws the ticks to match. */
+async function refreshSelection(): Promise<void> {
   if (!viewer) return;
-  if (total === 0) await clearSelection(viewer);
-  else await select(viewer, byModel);
+  selection = await readSelection(viewer);
+  recount();
+  render();
+
+  const total = totalSelected();
+  let placed = 0;
+  for (const count of selectedPerLevel.values()) placed += count;
+
+  if (total === 0) {
+    setStatus("");
+  } else if (placed === total) {
+    setStatus(`${total} objects selected.`);
+  } else {
+    setStatus(`${total} selected — ${total - placed} of them belong to no floor.`);
+  }
+}
+
+function recount(): void {
+  selectedPerLevel = new Map();
+  for (const [modelId, ids] of selection) {
+    const ownersForModel = owners.get(modelId);
+    if (!ownersForModel) continue;
+    for (const id of ids) {
+      const levelId = ownersForModel.get(id);
+      if (levelId === undefined) continue;
+      selectedPerLevel.set(levelId, (selectedPerLevel.get(levelId) ?? 0) + 1);
+    }
+  }
 }
 
 function loadStoreys(storeys: Storey[]): void {
   levels = groupStoreysIntoLevels(storeys);
-  // Keep ticks that still refer to a floor that exists, so loading a second model
-  // does not throw away what the user had chosen.
-  const alive = new Set(levels.map((level) => level.id));
-  for (const id of [...ticked]) if (!alive.has(id)) ticked.delete(id);
+  owners = new Map();
+  for (const level of levels) {
+    for (const storey of level.storeys) {
+      let ownersForModel = owners.get(storey.modelId);
+      if (!ownersForModel) {
+        ownersForModel = new Map();
+        owners.set(storey.modelId, ownersForModel);
+      }
+      for (const id of storey.objectRuntimeIds) ownersForModel.set(id, level.id);
+    }
+  }
   anchor = null;
   reportEl.hidden = true;
   levelsEl.hidden = false;
+  recount();
   render();
   if (levels.length === 0) setStatus("No IfcBuildingStorey objects found in the loaded models.");
-  else void syncSelection();
 }
 
 async function scan(): Promise<void> {
@@ -145,16 +205,15 @@ async function scan(): Promise<void> {
   setStatus("Scanning loaded models…");
   try {
     loadStoreys(await scanStoreys(viewer));
+    await refreshSelection();
   } catch (error) {
     setStatus(`Scan failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
- * Rescans after the viewer settles.
- *
- * Loading a model fires several state events in quick succession, and scanning on each
- * one would mean several redundant passes over every model.
+ * Both handlers below wait for the viewer to settle. Loading a model fires several state
+ * events in a row, and dragging a selection box fires one per object.
  */
 let rescanTimer: number | undefined;
 function scheduleRescan(): void {
@@ -162,32 +221,34 @@ function scheduleRescan(): void {
   rescanTimer = window.setTimeout(() => void scan(), 750);
 }
 
+let selectionTimer: number | undefined;
+function scheduleSelectionRefresh(): void {
+  window.clearTimeout(selectionTimer);
+  selectionTimer = window.setTimeout(() => void refreshSelection(), 150);
+}
+
 refreshBtn.addEventListener("click", () => void scan());
 
 isolateBtn.addEventListener("click", () => {
-  const { byModel, total } = tickedObjects();
-  if (ticked.size === 0) {
-    setStatus("Tick at least one floor first.");
+  if (totalSelected() === 0) {
+    setStatus("Select a floor, or an object in the model, first.");
     return;
   }
-  if (total === 0) {
-    setStatus("Those floors contain no objects, so there is nothing to show. Press Diagnose.");
-    return;
-  }
-  if (viewer) void showOnly(viewer, byModel);
+  if (viewer) void showOnly(viewer, selection);
 });
 
-showAllBtn.addEventListener("click", () => {
+resetBtn.addEventListener("click", () => {
   reportEl.hidden = true;
   levelsEl.hidden = false;
-  ticked.clear();
   anchor = null;
-  render();
   setStatus("");
-  if (viewer) {
-    void showAll(viewer);
-    void clearSelection(viewer);
-  }
+  const live = viewer;
+  if (!live) return;
+  void (async () => {
+    await showAll(live);
+    await clearSelection(live);
+    await refreshSelection();
+  })();
 });
 
 heightsBtn.addEventListener("click", () => {
@@ -222,6 +283,7 @@ async function start(): Promise<void> {
   try {
     viewer = await connectToViewer((name) => {
       if (name === "viewer.onModelStateChanged" || name === "viewer.onModelReset") scheduleRescan();
+      if (name === "viewer.onSelectionChanged") scheduleSelectionRefresh();
     });
     await scan();
   } catch (error) {

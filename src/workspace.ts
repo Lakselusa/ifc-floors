@@ -119,33 +119,43 @@ function readElevation(storey: { position?: { z?: number }; properties?: unknown
   return null;
 }
 
-/** The per-model object lists the viewer API takes, built from our own grouping. */
-function toModelObjectIds(byModel: Map<string, number[]>) {
-  return [...byModel.entries()].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds }));
+/** Object ids grouped by model — the shape both our logic and the viewer work in. */
+export type Selection = Map<string, Set<number>>;
+
+function toModelObjectIds(byModel: Map<string, number[]> | Selection) {
+  return [...byModel.entries()].map(([modelId, ids]) => ({
+    modelId,
+    objectRuntimeIds: [...ids],
+  }));
 }
 
 /**
- * Shows only the given objects, hiding everything else.
+ * Reads what is currently selected in the viewer.
  *
- * This calls the viewer's own isolate, which its documentation describes as the
- * equivalent of "Show only selected objects" in the Trimble UI. Doing it by hand —
- * hiding everything and then unhiding a list — looks the same but is not: it leaves the
- * viewer in a state its own "show all" does not always undo cleanly.
+ * The panel asks for this rather than trusting the selection event's payload, because
+ * the answer is the same either way and this cannot drift out of step with reality.
  */
-export async function showOnly(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
-  const modelEntities = [...byModel.entries()].map(([modelId, entityIds]) => ({ modelId, entityIds }));
-  if (modelEntities.length === 0) return;
-  await viewer.viewer.isolateEntities(modelEntities);
+export async function readSelection(viewer: Viewer): Promise<Selection> {
+  const raw = await viewer.viewer.getSelection();
+  const selection: Selection = new Map();
+  for (const entry of raw ?? []) {
+    selection.set(entry.modelId, new Set(entry.objectRuntimeIds ?? []));
+  }
+  return selection;
 }
 
-/** Selects the given objects, replacing any existing selection. */
-export async function select(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
+/** Adds objects to the viewer's selection, leaving the rest of it alone. */
+export async function addToSelection(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
   const modelObjectIds = toModelObjectIds(byModel);
-  if (modelObjectIds.length === 0) {
-    await clearSelection(viewer);
-    return;
-  }
-  await viewer.viewer.setSelection({ modelObjectIds }, "set");
+  if (modelObjectIds.length === 0) return;
+  await viewer.viewer.setSelection({ modelObjectIds }, "add");
+}
+
+/** Removes objects from the viewer's selection, leaving the rest of it alone. */
+export async function removeFromSelection(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
+  const modelObjectIds = toModelObjectIds(byModel);
+  if (modelObjectIds.length === 0) return;
+  await viewer.viewer.setSelection({ modelObjectIds }, "remove");
 }
 
 /**
@@ -156,6 +166,22 @@ export async function select(viewer: Viewer, byModel: Map<string, number[]>): Pr
  */
 export async function clearSelection(viewer: Viewer): Promise<void> {
   await viewer.viewer.setSelection({ modelObjectIds: [] }, "set");
+}
+
+/**
+ * Shows only the given objects, hiding everything else.
+ *
+ * This calls the viewer's own isolate, which its documentation describes as the
+ * equivalent of "Show only selected objects" in the Trimble UI. Doing it by hand —
+ * hiding everything and then unhiding a list — looks the same but is not: it leaves the
+ * viewer in a state its own "show all" does not always undo cleanly.
+ */
+export async function showOnly(viewer: Viewer, selection: Selection): Promise<void> {
+  const modelEntities = [...selection.entries()]
+    .map(([modelId, ids]) => ({ modelId, entityIds: [...ids] }))
+    .filter((entry) => entry.entityIds.length > 0);
+  if (modelEntities.length === 0) return;
+  await viewer.viewer.isolateEntities(modelEntities);
 }
 
 /** Restores the viewer's default visibility for every object. */

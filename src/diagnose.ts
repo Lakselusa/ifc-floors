@@ -37,6 +37,28 @@ export async function diagnose(viewer: Viewer): Promise<string> {
     }
   });
 
+  // If something is selected, say everything we can about it. This is how to investigate
+  // an object the scan never placed on a floor: select it in the viewer, then press
+  // Diagnose, and the report shows what the model says it belongs to.
+  await attempt("selected object", async () => {
+    const current = await api.getSelection();
+    const first = (current ?? []).find((entry) => (entry.objectRuntimeIds ?? []).length > 0);
+    const objectId = first?.objectRuntimeIds?.[0];
+    if (!first || objectId === undefined) {
+      say("\nNothing selected in the viewer — select an object to have it examined here.");
+      return;
+    }
+    say(`\n--- selected object ${objectId} in model ${first.modelId} ---`);
+    const [properties] = await api.getObjectProperties(first.modelId, [objectId]);
+    say(`  class=${properties?.class} product=${JSON.stringify(properties?.product)}`);
+    say(`  position=${JSON.stringify(properties?.position)}`);
+    say(`  property sets=${JSON.stringify((properties?.properties ?? []).map((set) => set.name))}`);
+    for (const [label, type] of [["SpatialContainment", 2], ["SpatialHierarchy", 1], ["Containment", 3]] as const) {
+      const parents = await api.getHierarchyParents(first.modelId, [objectId], type, true);
+      say(`  parents via ${label}: ${JSON.stringify(parents)}`);
+    }
+  });
+
   const storeysByModel = new Map<string, number[]>();
   await attempt("class filter", async () => {
     const found = await api.getObjects({ parameter: { class: STOREY_CLASS } });
