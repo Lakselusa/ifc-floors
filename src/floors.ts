@@ -23,8 +23,8 @@ export interface Storey {
 export interface Level {
   /** Stable key for UI state. */
   id: string;
-  /** Human label, e.g. "4. etasje (+12000)". */
-  label: string;
+  /** Human label, e.g. "4. etasje". The height is kept separate so the UI can hide it. */
+  name: string;
   /** Mean elevation of the cluster, or null for the unplaced bucket. */
   elevation: number | null;
   /** The per-model storeys that landed on this level. */
@@ -72,7 +72,7 @@ export function groupStoreysIntoLevels(storeys: Storey[], options: GroupOptions 
     const elevation = mean(cluster.map((s) => s.elevation));
     return {
       id: `elev:${Math.round(elevation)}`,
-      label: `${pickLabel(cluster)} (${formatElevation(elevation)})`,
+      name: pickLabel(cluster),
       elevation,
       storeys: cluster,
       objectCount: countObjects(cluster),
@@ -88,7 +88,7 @@ export function groupStoreysIntoLevels(storeys: Storey[], options: GroupOptions 
   for (const [name, cluster] of byName) {
     levels.push({
       id: `name:${name}`,
-      label: `${name} (no elevation)`,
+      name,
       elevation: null,
       storeys: cluster,
       objectCount: countObjects(cluster),
@@ -118,7 +118,9 @@ function mean(values: number[]): number {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-function formatElevation(mm: number): string {
+/** Renders a height the way a drawing would, e.g. "+12000" or "-3500". */
+export function formatElevation(mm: number | null): string {
+  if (mm === null) return "no height";
   const sign = mm < 0 ? "-" : "+";
   return `${sign}${Math.abs(Math.round(mm))}`;
 }

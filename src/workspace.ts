@@ -7,9 +7,18 @@ import type { Storey } from "./floors.ts";
 
 export type Viewer = Awaited<ReturnType<typeof Workspace.connect>>;
 
-/** Connects to the host Trimble Connect window. Only works inside the extension iframe. */
-export async function connectToViewer(): Promise<Viewer> {
-  return Workspace.connect(window.parent, () => {}, 30_000);
+/**
+ * Connects to the host Trimble Connect window. Only works inside the extension iframe.
+ *
+ * `onEvent` receives the name of every viewer event, which is how the panel notices that
+ * a model has been loaded or unloaded and refreshes itself.
+ */
+export async function connectToViewer(onEvent?: (name: string) => void): Promise<Viewer> {
+  return Workspace.connect(
+    window.parent,
+    (event: unknown) => onEvent?.(typeof event === "string" ? event : String(event)),
+    30_000,
+  );
 }
 
 /**
@@ -115,19 +124,38 @@ function toModelObjectIds(byModel: Map<string, number[]>) {
   return [...byModel.entries()].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds }));
 }
 
-/** Hides everything, then shows only the given objects. */
-export async function isolate(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
-  const modelObjectIds = toModelObjectIds(byModel);
-  if (modelObjectIds.length === 0) return;
-  await viewer.viewer.setObjectState(undefined, { visible: false });
-  await viewer.viewer.setObjectState({ modelObjectIds }, { visible: true });
+/**
+ * Shows only the given objects, hiding everything else.
+ *
+ * This calls the viewer's own isolate, which its documentation describes as the
+ * equivalent of "Show only selected objects" in the Trimble UI. Doing it by hand —
+ * hiding everything and then unhiding a list — looks the same but is not: it leaves the
+ * viewer in a state its own "show all" does not always undo cleanly.
+ */
+export async function showOnly(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
+  const modelEntities = [...byModel.entries()].map(([modelId, entityIds]) => ({ modelId, entityIds }));
+  if (modelEntities.length === 0) return;
+  await viewer.viewer.isolateEntities(modelEntities);
 }
 
 /** Selects the given objects, replacing any existing selection. */
 export async function select(viewer: Viewer, byModel: Map<string, number[]>): Promise<void> {
   const modelObjectIds = toModelObjectIds(byModel);
-  if (modelObjectIds.length === 0) return;
+  if (modelObjectIds.length === 0) {
+    await clearSelection(viewer);
+    return;
+  }
   await viewer.viewer.setSelection({ modelObjectIds }, "set");
+}
+
+/**
+ * Empties the selection.
+ *
+ * An empty list rather than no list: leaving the selector undefined means "every object",
+ * which would select the entire project instead of clearing it.
+ */
+export async function clearSelection(viewer: Viewer): Promise<void> {
+  await viewer.viewer.setSelection({ modelObjectIds: [] }, "set");
 }
 
 /** Restores the viewer's default visibility for every object. */

@@ -74,17 +74,19 @@ minute.
 
 ## How the scan works
 
-For every loaded model:
+1. `getModels("loaded")` — the models actually in the viewer. Note that `getModels()` with
+   no argument returns every file in the project, which is not the same thing.
+2. `getObjects({ parameter: { class: "IFCBUILDINGSTOREY" } })` — finds the storeys in every
+   loaded model in one call, already grouped by model. The class string is case sensitive.
+   Asking for a model's objects without giving object ids returns nothing, so this filter is
+   the only way to search.
+3. `getObjectProperties(modelId, storeyIds)` — each storey's name and height.
+4. `getObjects({ modelObjectIds: [{ modelId, objectRuntimeIds: [storeyId], recursive: true }] })`
+   — everything underneath that storey. The hierarchy API is kept as a fallback.
 
-1. `getModels("loaded")` → the models in the viewer.
-2. `getObjects({ modelObjectIds: [{ modelId }] })` → every object, filtered locally to
-   those whose `class` is `IFCBUILDINGSTOREY`.
-3. `getObjectProperties(modelId, storeyIds)` → each storey's name and elevation.
-4. `getHierarchyChildren(modelId, [storeyId], SpatialContainment, true)` → the objects
-   contained in that storey.
-
-Isolating a floor is `setObjectState(undefined, { visible: false })` followed by
-`setObjectState({ modelObjectIds }, { visible: true })`.
+Ticking a floor selects its objects. **Show only selected** calls `isolateEntities`, which is
+the viewer's own "Show only selected objects". **Show all** resets visibility and clears the
+selection. The panel rescans itself when a model is loaded or unloaded.
 
 ## Known rough edges
 

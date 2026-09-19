@@ -39,13 +39,13 @@ test("does not let a run of near-misses drift into one cluster", () => {
   assert.equal(levels.length, 2, "0 and 400 merge; 800 is beyond tolerance of the cluster start");
 });
 
-test("labels a level with the name used by the most models", () => {
+test("names a level after the name used by the most models", () => {
   const levels = groupStoreysIntoLevels([
     storey("a", "4. etasje", 12000, [1]),
     storey("b", "4. etasje", 12010, [2]),
     storey("c", "Level_4", 12020, [3]),
   ]);
-  assert.match(levels[0]!.label, /^4\. etasje \(\+12010\)$/);
+  assert.equal(levels[0]!.name, "4. etasje");
 });
 
 test("buckets storeys with no elevation by name instead of dropping them", () => {
