@@ -109,3 +109,20 @@ button.primary {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+/* Diagnostic output, meant to be selected and copied out. */
+.report {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  white-space: pre;
+  resize: none;
+}
+
+.report[hidden] { display: none; }

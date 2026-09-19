@@ -1,12 +1,15 @@
 import { groupStoreysIntoLevels, objectIdsByModel, type Level, type Storey } from "./floors.ts";
 import { connectToViewer, scanStoreys, isolate, showAll, type Viewer } from "./workspace.ts";
 import { mockStoreys } from "./mock.ts";
+import { diagnose } from "./diagnose.ts";
 
 const statusEl = document.querySelector<HTMLParagraphElement>("#status")!;
 const levelsEl = document.querySelector<HTMLUListElement>("#levels")!;
 const refreshBtn = document.querySelector<HTMLButtonElement>("#refresh")!;
 const isolateBtn = document.querySelector<HTMLButtonElement>("#isolate")!;
 const showAllBtn = document.querySelector<HTMLButtonElement>("#show-all")!;
+const diagnoseBtn = document.querySelector<HTMLButtonElement>("#diagnose")!;
+const reportEl = document.querySelector<HTMLTextAreaElement>("#report")!;
 
 /** Null when running standalone in a browser tab rather than inside Trimble Connect. */
 let viewer: Viewer | null = null;
@@ -68,6 +71,19 @@ async function scan(): Promise<void> {
 
 refreshBtn.addEventListener("click", () => void scan());
 
+diagnoseBtn.addEventListener("click", async () => {
+  if (!viewer) {
+    setStatus("Diagnose only works inside Trimble Connect.");
+    return;
+  }
+  setStatus("Probing the viewer API…");
+  reportEl.value = await diagnose(viewer);
+  reportEl.hidden = false;
+  levelsEl.hidden = true;
+  reportEl.select();
+  setStatus("Report below is selected — press Ctrl+C to copy it.");
+});
+
 isolateBtn.addEventListener("click", () => {
   const chosen = levels.filter((level) => selected.has(level.id));
   if (chosen.length === 0) {
@@ -84,6 +100,8 @@ isolateBtn.addEventListener("click", () => {
 });
 
 showAllBtn.addEventListener("click", () => {
+  reportEl.hidden = true;
+  levelsEl.hidden = false;
   selected.clear();
   render();
   setStatus("");
